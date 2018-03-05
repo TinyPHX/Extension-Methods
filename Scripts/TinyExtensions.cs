@@ -705,29 +705,17 @@ namespace TP.ExtensionMethods
                 else if (type != typeof(Transform))
                 {
                     equal = false;
-
-                    bool deepEqualityCheck = false;
-
-                    if (type.IsSubclassOf(typeof(Component)) ||
-                        type == typeof(Bounds)) //Needs deep check becuase unity prefab dont init values for Bounds.extents.
-                    {
-                        deepEqualityCheck = true;
-                    }
-
+                    
                     if (objectA.Equals(objectB))
                     {
                         equal = true;
                     }
-                    //else if (PrefabLinkHelper.Equals(objectA, objectB)) 
-                    //{
-                    //    equals = true;
-                    //}
-                    else if (deepEqualityCheck)
+                    else if (type.IsSubclassOf(typeof(Component)))
                     {   
                         FieldInfo[] fields = objectA.GetType().GetFieldsComparable().ToArray();
                         PropertyInfo[] properties = objectA.GetType().GetPropertiesComparable().ToArray();
 
-                        bool verbose = true;
+                        bool verbose = false;
                         string[] fieldNames = null;
                         string[] propertyNames = null;
                         if (verbose || masterVerbose)
@@ -745,11 +733,6 @@ namespace TP.ExtensionMethods
                         bool propertiesEqual = propertiesValueA.ValueOrderedEquals(propertiesValueB, ValueEqualsCheck, verbose, propertyNames);
 
                         equal = fieldsEqual && propertiesEqual;
-
-                        if (equal)
-                        {
-                            //Debug.Log("Deep Match: " + objectA.ToString());
-                        }
                     }
                 }
             }
@@ -915,10 +898,10 @@ namespace TP.ExtensionMethods
 
             if (type.IsSubclassOf(typeof(Component)))
             {
-                if (!includeNames)
-                {
-                    types.Add(string.Concat(type, ".name"));
-                }
+                //if (!includeNames)
+                //{
+                //types.Add(string.Concat(type, ".name"));
+                //}
                 types.Add(string.Concat(type, ".mesh"));
                 types.Add(string.Concat(type, ".material"));
                 types.Add(string.Concat(type, ".materials"));   
@@ -933,10 +916,10 @@ namespace TP.ExtensionMethods
             
             if (type.IsSubclassOf(typeof(Component)))
             {
-                if (!includeNames)
-                {
-                    types.Add(string.Concat(type, ".name"));
-                }
+                //if (!includeNames)
+                //{
+                //types.Add(string.Concat(type, ".name"));
+                //}
                 types.Add(string.Concat(type, ".gameObject"));
                 types.Add(string.Concat(type, ".hideFlags"));
                 types.Add(string.Concat(type, ".mesh"));
@@ -960,16 +943,6 @@ namespace TP.ExtensionMethods
                     types.Add(string.Concat(type, ".bounds"));
                 }
             }
-
-            //Ignore all bounds
-            //if (type == typeof(Bounds))
-            //{
-            //    types.Add(string.Concat(type, ".center"));
-            //    types.Add(string.Concat(type, ".extents"));
-            //    types.Add(string.Concat(type, ".max"));
-            //    types.Add(string.Concat(type, ".min"));
-            //    types.Add(string.Concat(type, ".size"));
-            //}
 
             return types;
         }
@@ -1043,7 +1016,9 @@ namespace TP.ExtensionMethods
             }
             else
             {
-                copy = Undo.AddComponent(destination, type);
+                #if UNITY_EDITOR
+                    copy = Undo.AddComponent(destination, type);
+                #endif
             }
 
             if (copy == null)
@@ -1076,7 +1051,7 @@ namespace TP.ExtensionMethods
                     }
                     catch (Exception exception)
                     {
-                        if (verbose || masterVerbose)
+                        if (verbose)
                         {
                             Debug.Log("Couldnt set field " + type.ToString() + "." + field.Name + ". " + exception.Message);
                         }
@@ -1092,7 +1067,7 @@ namespace TP.ExtensionMethods
                     }
                     catch (Exception exception)
                     {
-                        if (verbose || masterVerbose)
+                        if (verbose)
                         {
                             Debug.Log("Couldnt access property " + type.ToString() + "." + property.Name + ". " + exception.Message);
                         }
