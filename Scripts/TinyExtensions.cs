@@ -5,6 +5,7 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Collections;
+using System.Reflection;
 using UnityEngine.AI;
 
 #if UNITY_EDITOR
@@ -18,6 +19,8 @@ namespace TP.ExtensionMethods
     /// </summary>
     public static class ExtensionMethods
     {
+        public static bool masterVerbose = false;
+
         /// <summary>
         /// Selects an element from a list at random. Each
         /// Item has a weight value and higher weights
@@ -76,7 +79,8 @@ namespace TP.ExtensionMethods
         {
             bool isPrefab = false;
 
-            if (gameObject.gameObject.scene.name == null && gameObject.scene.name == null)
+            if (gameObject != null && gameObject.scene.name == null ||
+                gameObject != null && gameObject.gameObject != null && gameObject.gameObject.scene.name == null)
             {
                 isPrefab = true;
             }
@@ -666,6 +670,367 @@ namespace TP.ExtensionMethods
             return randomPicks;
         }
         
+        public delegate bool ValueEqualsFunc<T>(T itemA, T itemB);
+                
+        public static bool ValueEquals(this GameObject gameObjectA, GameObject gameObjectB)
+        {
+            return ValueEqualsCheck(gameObjectA, gameObjectB);
+        }
+
+        private static bool ValueEqualsCheck(GameObject gameObjectA, GameObject gameObjectB)
+        {
+            bool childrenMatch = gameObjectA.Children().ValueScrambledEquals(gameObjectB.Children(), ValueEqualsCheck);
+            bool componentsMatch = gameObjectA.GetComponents<Component>().ValueScrambledEquals(gameObjectB.GetComponents<Component>(), ValueEqualsCheck);
+
+            return childrenMatch && componentsMatch;
+        }
+        
+        public static bool ValueEquals(this Component componentA, Component componentB)
+        {
+            return ValueEqualsCheck(componentA, componentB);
+        }
+
+        private static bool ValueEqualsCheck(object objectA, object objectB)
+        {
+            bool equal = true;
+
+            if (objectA != null && objectB != null)
+            {
+                Type type = objectA.GetType();
+
+                if (objectA.GetType() != objectB.GetType())
+                {
+                    equal = false;
+                }
+                else if (type != typeof(Transform))
+                {
+                    equal = false;
+
+                    bool deepEqualityCheck = false;
+
+                    if (type.IsSubclassOf(typeof(Component)) ||
+                        type == typeof(Bounds)) //Needs deep check becuase unity prefab dont init values for Bounds.extents.
+                    {
+                        deepEqualityCheck = true;
+                    }
+
+                    if (objectA.Equals(objectB))
+                    {
+                        equal = true;
+                    }
+                    //else if (PrefabLinkHelper.Equals(objectA, objectB)) 
+                    //{
+                    //    equals = true;
+                    //}
+                    else if (deepEqualityCheck)
+                    {   
+                        FieldInfo[] fields = objectA.GetType().GetFieldsComparable().ToArray();
+                        PropertyInfo[] properties = objectA.GetType().GetPropertiesComparable().ToArray();
+
+                        bool verbose = true;
+                        string[] fieldNames = null;
+                        string[] propertyNames = null;
+                        if (verbose || masterVerbose)
+                        {
+                            fieldNames = Array.ConvertAll(fields, fieldInfo => fieldInfo.Name);
+                            propertyNames = Array.ConvertAll(properties, fieldInfo => fieldInfo.Name);
+                        }
+
+                        object[] fieldsValueA = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectA));
+                        object[] fieldsValueB = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectB));
+                        bool fieldsEqual = fieldsValueA.ValueOrderedEquals(fieldsValueB, ValueEqualsCheck, verbose, fieldNames);
+                        
+                        object[] propertiesValueA = Array.ConvertAll(properties, propertyInfo => propertyInfo.GetValueNoError(objectA));
+                        object[] propertiesValueB = Array.ConvertAll(properties, propertyInfo => propertyInfo.GetValueNoError(objectB));
+                        bool propertiesEqual = propertiesValueA.ValueOrderedEquals(propertiesValueB, ValueEqualsCheck, verbose, propertyNames);
+
+                        equal = fieldsEqual && propertiesEqual;
+
+                        if (equal)
+                        {
+                            //Debug.Log("Deep Match: " + objectA.ToString());
+                        }
+                    }
+                }
+            }
+            
+            return equal;
+        }
+
+        public static object GetValueNoError(this FieldInfo fieldInfo, object obj, bool verbose=false)
+        {
+            object value = default(object);
+
+            try
+            {
+                value = fieldInfo.GetValue(obj);
+            }
+            catch (Exception exception)
+            {
+                if (verbose)
+                {
+                    Debug.Log("Couldnt access field " + obj.ToString() + "." + fieldInfo.Name + ". " + exception.Message);
+                }
+            }
+
+            return value;
+        }
+
+        public static object GetValueNoError(this PropertyInfo propertyInfo, object obj, bool verbose=false)
+        {
+            object value = default(object);
+
+            try
+            {
+                value = propertyInfo.GetValue(obj, null);
+            }
+            catch (Exception exception)
+            {
+                if (verbose)
+                {
+                    Debug.Log("Couldnt access field " + obj.ToString() + "." + propertyInfo.Name + ". " + exception.Message);
+                }
+            }
+
+            return value;
+        }
+        
+        public static bool ValueOrderedEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null)
+        {
+            bool equals = true;
+            int length = setA.Length;
+
+            if (setA.Length != setB.Length)
+            {
+                equals = false;
+            }
+            else
+            {
+                for (int i = 0; i < length; i++)
+                {
+                    T itemA = setA[i];
+                    T itemB = setB[i];
+
+                    if (!valueEquals(itemA, itemB))
+                    {
+                        equals = false;
+
+                        if (verbose || masterVerbose)
+                        {
+                            string itemNameA = names[i];
+                            string itemValueA = itemA != null ? "null" : itemA.ToString();
+                            string itemNameB = names[i];
+                            string itemValueB = itemB != null ? "null" : itemB.ToString();
+
+                            Debug.Log(String.Concat("Non-Match: (", itemNameA, ") ", itemA.ToString(), " != ", itemB.ToString()));
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        //if ((verbose || masterVerbose) && itemA != null)
+                        //{
+                        //    string itemNameA = names[i];
+                        //    string itemValueA = itemA != null ? "null" : itemA.ToString();
+
+                        //    Debug.Log(String.Concat("Match: (", itemNameA, ") ", itemValueA));
+                        //}
+                    }
+                }
+            }
+
+            return equals;
+        }
+        
+        public static bool ValueScrambledEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null) 
+        {
+            bool equals = true;
+            int lengthA = setA.Length;
+            int lengthB = setB.Length;
+
+            if (lengthA != lengthB)
+            {
+                equals = false;
+            }
+            else
+            { 
+                bool[] indexMatchedA = new bool[lengthA];
+                bool[] indexMatchedB = new bool[lengthB];
+
+                for (int ia = 0; ia < lengthA; ia++)
+                {
+                    if (indexMatchedA[ia]) { continue; }
+
+                    bool matchFound = false;
+
+                    T itemA = setA[ia];
+                    for (int ib = 0; ib < lengthB; ib++)
+                    {
+                        if (indexMatchedB[ib]) { continue; }
+
+                        T itemB = setB[ib];
+                        if (valueEquals(itemA, itemB))
+                        {
+                            indexMatchedA[ia] = true;
+                            indexMatchedB[ib] = true;
+                            matchFound = true;
+                            break;
+                        }
+                    }
+
+                    if (!matchFound)
+                    {
+                        equals = false;
+
+                        break;
+                    }
+                }
+            }
+
+            return equals;
+        }
+
+        public static GameObject[] Children(this GameObject gameObject)
+        {
+            Transform transform  = gameObject.transform;
+            int childCount = transform.childCount;
+            GameObject[] children = new GameObject[childCount];
+
+            for (int i = 0; i < childCount; i++)
+            {
+                children[i] = transform.GetChild(i).gameObject;
+            }
+
+            return children;
+        }
+
+        public static bool includeNames = true;
+
+        public static List<string> CantCopy(this Type type)
+        {
+            List<string> types = new List<string> { };
+
+            if (type.IsSubclassOf(typeof(Component)))
+            {
+                if (!includeNames)
+                {
+                    types.Add(string.Concat(type, ".name"));
+                }
+                types.Add(string.Concat(type, ".mesh"));
+                types.Add(string.Concat(type, ".material"));
+                types.Add(string.Concat(type, ".materials"));   
+            }
+
+            return types;
+        }
+
+        public static List<string> CantCompare(this Type type)
+        {
+            List<string> types = new List<string> { };
+            
+            if (type.IsSubclassOf(typeof(Component)))
+            {
+                if (!includeNames)
+                {
+                    types.Add(string.Concat(type, ".name"));
+                }
+                types.Add(string.Concat(type, ".gameObject"));
+                types.Add(string.Concat(type, ".hideFlags"));
+                types.Add(string.Concat(type, ".mesh"));
+                types.Add(string.Concat(type, ".material"));
+                types.Add(string.Concat(type, ".materials"));
+                types.Add(string.Concat(type, ".sharedMesh"));
+                types.Add(string.Concat(type, ".sharedMaterial"));
+                types.Add(string.Concat(type, ".sharedMaterials"));
+                types.Add(string.Concat(type, ".isActiveAndEnabled"));
+
+                if (type.IsSubclassOf(typeof(Renderer)))
+                {
+                    types.Add(string.Concat(type, ".isVisible"));
+                    types.Add(string.Concat(type, ".bounds"));
+                    types.Add(string.Concat(type, ".worldToLocalMatrix"));
+                    types.Add(string.Concat(type, ".localToWorldMatrix"));
+                }
+
+                if (type.IsSubclassOf(typeof(Collider)))
+                {
+                    types.Add(string.Concat(type, ".bounds"));
+                }
+            }
+
+            //Ignore all bounds
+            //if (type == typeof(Bounds))
+            //{
+            //    types.Add(string.Concat(type, ".center"));
+            //    types.Add(string.Concat(type, ".extents"));
+            //    types.Add(string.Concat(type, ".max"));
+            //    types.Add(string.Concat(type, ".min"));
+            //    types.Add(string.Concat(type, ".size"));
+            //}
+
+            return types;
+        }
+
+        public static List<PropertyInfo> GetPropertiesComparable(this Type type)
+        {
+            return GetPropertiesFiltered(type, type.CantCompare());
+        }
+
+        public static List<PropertyInfo> GetPropertiesCopyable(this Type type)
+        {
+            return GetPropertiesFiltered(type, type.CantCopy());
+        }
+
+        public static List<PropertyInfo> GetPropertiesFiltered(this Type type, List<string> typesToIgnore)
+        {
+            PropertyInfo[] propertiesUnfiltered = type.GetProperties();
+            List<PropertyInfo> propertiesFiltered = new  List<PropertyInfo>{ };
+
+            foreach (PropertyInfo property in propertiesUnfiltered)
+            {
+                string fullName = string.Concat(type.ToString(), ".", property.Name);
+
+                if (!typesToIgnore.Contains(fullName))
+                {
+                    propertiesFiltered.Add(property);
+                }
+            }
+
+            return propertiesFiltered;
+        }
+        
+
+        public static List<FieldInfo> GetFieldsComparable(this Type type)
+        {
+            return GetFieldsFiltered(type, type.CantCompare());
+        }
+
+        public static List<FieldInfo> GetFieldsCopyable(this Type type)
+        {
+            return GetFieldsFiltered(type, type.CantCopy());
+        }
+
+        public static List<FieldInfo> GetFieldsFiltered(this Type type, List<string> typesToIgnore)
+        {
+            FieldInfo[] fieldsUnfiltered = type.GetFields();
+            List<FieldInfo> fieldsFiltered = new  List<FieldInfo>{ };
+
+            foreach (FieldInfo property in fieldsUnfiltered)
+            {
+                string fullName = string.Concat(type.ToString(), ".", property.Name);
+
+                if (!typesToIgnore.Contains(fullName))
+                {
+                    fieldsFiltered.Add(property);
+                }
+            }
+
+            return fieldsFiltered;
+        }
+        
         public static Component CopyComponent<T>(this GameObject destination, T original, bool verbose = false) where T : Component
         {
             System.Type type = original.GetType();
@@ -688,63 +1053,6 @@ namespace TP.ExtensionMethods
 
                 copy = destination.GetComponent(type);
             }
-            
-            List<string> propertiesToIgnore = new List<string> { };
-
-            //propertiesToIgnore.Add("UnityEngine.Transform.parent");
-
-            if (type == typeof(Renderer))
-            {
-                Renderer rendererCopy = copy as Renderer;
-                Renderer rendererOriginal = original as Renderer;
-                rendererCopy.sharedMaterial = rendererOriginal.sharedMaterial;
-                rendererCopy.sharedMaterials = rendererOriginal.sharedMaterials;
-
-                propertiesToIgnore.Add("UnityEngine.Renderer.material");
-                propertiesToIgnore.Add("UnityEngine.Renderer.materials");
-            }
-
-            if (type == typeof(MeshFilter))
-            {
-                MeshFilter meshFilterCopy = copy as MeshFilter;
-                MeshFilter meshFilterOriginal = original as MeshFilter;
-                meshFilterCopy.sharedMesh = meshFilterOriginal.sharedMesh;
-                
-                propertiesToIgnore.Add("UnityEngine.MeshFilter.mesh");
-            }
-
-            if (type == typeof(MeshRenderer))
-            {
-                MeshRenderer meshRendererCopy = copy as MeshRenderer;
-                MeshRenderer meshRendererOriginal = original as MeshRenderer;
-                meshRendererCopy.sharedMaterial = meshRendererOriginal.sharedMaterial;
-                meshRendererCopy.sharedMaterials = meshRendererOriginal.sharedMaterials;
-                
-                propertiesToIgnore.Add("UnityEngine.MeshRenderer.material");
-                propertiesToIgnore.Add("UnityEngine.MeshRenderer.materials");
-            }
-
-            if (type == typeof(SpriteRenderer))
-            {
-                SpriteRenderer spriteRendererCopy = copy as SpriteRenderer;
-                SpriteRenderer spriteRendererOriginal = original as SpriteRenderer;
-                spriteRendererCopy.sharedMaterial = spriteRendererOriginal.sharedMaterial;
-                spriteRendererCopy.sharedMaterials = spriteRendererOriginal.sharedMaterials;
-                
-                propertiesToIgnore.Add("UnityEngine.SpriteRenderer.material");
-                propertiesToIgnore.Add("UnityEngine.SpriteRenderer.materials");
-            }
-
-            if (type == typeof(ParticleSystemRenderer))
-            {
-                ParticleSystemRenderer particleRendererCopy = copy as ParticleSystemRenderer;
-                ParticleSystemRenderer particleRendererOriginal = original as ParticleSystemRenderer;
-                particleRendererCopy.sharedMaterial = particleRendererOriginal.sharedMaterial;
-                particleRendererCopy.sharedMaterials = particleRendererOriginal.sharedMaterials;
-                
-                propertiesToIgnore.Add("UnityEngine.ParticleSystemRenderer.material");
-                propertiesToIgnore.Add("UnityEngine.ParticleSystemRenderer.materials");
-            }
 
             if (type == typeof(Transform))
             {
@@ -759,8 +1067,8 @@ namespace TP.ExtensionMethods
             }
             else
             {
-                System.Reflection.FieldInfo[] fields = type.GetFields();
-                foreach (System.Reflection.FieldInfo field in fields)
+                List<FieldInfo> fields = type.GetFieldsCopyable();
+                foreach (FieldInfo field in fields)
                 {
                     try
                     {
@@ -768,45 +1076,25 @@ namespace TP.ExtensionMethods
                     }
                     catch (Exception exception)
                     {
-                        if (verbose)
+                        if (verbose || masterVerbose)
                         {
                             Debug.Log("Couldnt set field " + type.ToString() + "." + field.Name + ". " + exception.Message);
                         }
                     }
                 }
 
-                System.Reflection.PropertyInfo[] properties = type.GetProperties();
-                foreach (System.Reflection.PropertyInfo property in properties)
+                List<PropertyInfo> properties = type.GetPropertiesCopyable();
+                foreach (PropertyInfo property in properties)
                 {
-                    string propertyName = string.Concat(type.ToString(), ".", property.Name);
-                    bool ignoreProperty = false;
-
-                    foreach (string propertyNameToIgnore in propertiesToIgnore)
+                    try
                     {
-                        if (string.Equals(propertyName, propertyNameToIgnore))
-                        {
-                            ignoreProperty = true;
-                            break;
-                        }
+                        property.SetValue(copy, property.GetValue(original, null), null);
                     }
-
-                    if (!ignoreProperty)
+                    catch (Exception exception)
                     {
-                        try
+                        if (verbose || masterVerbose)
                         {
-                            object value = property.GetValue(original, null);
-
-                            if (value != null)
-                            {
-                                property.SetValue(copy, value, null);
-                            }
-                        }
-                        catch (Exception exception)
-                        {
-                            if (verbose)
-                            {
-                                Debug.Log("Couldnt access property " + type.ToString() + "." + property.Name + ". " + exception.Message);
-                            }
+                            Debug.Log("Couldnt access property " + type.ToString() + "." + property.Name + ". " + exception.Message);
                         }
                     }
                 }
