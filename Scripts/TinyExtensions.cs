@@ -186,12 +186,6 @@ namespace TP.ExtensionMethods
             }
         }
 
-        /// TODO DELETE
-        public static T GetComponentInChildrenAndSelf<T>(this GameObject gameObject)
-        {
-            return gameObject.GetComponentInChildren<T>();
-        }
-
         /// <summary>
         /// Gets the closes active GameObject to the origin GameObject.
         /// </summary>
@@ -390,6 +384,14 @@ namespace TP.ExtensionMethods
                 {
                     list.Add(item);
                 }
+            }
+        }
+
+        public static void RemoveRange<T>(this List<T> list, List<T> range)
+        {
+            foreach (T item in range)
+            {
+                list.Remove(item);
             }
         }
 
@@ -599,6 +601,8 @@ namespace TP.ExtensionMethods
             return rect;
         }
 
+        #region Enumerable Management
+
         /// <summary>
         /// Picks an element at random from an array
         /// </summary>
@@ -669,28 +673,32 @@ namespace TP.ExtensionMethods
 
             return randomPicks;
         }
-        
+
+        #endregion
+
+        #region Deep Equality Checking
+
         public delegate bool ValueEqualsFunc<T>(T itemA, T itemB);
                 
         public static bool ValueEquals(this GameObject gameObjectA, GameObject gameObjectB)
         {
-            return ValueEqualsCheck(gameObjectA, gameObjectB);
+            return DeepEqualsGameObj(gameObjectA, gameObjectB);
+        }
+        
+        public static bool ValueEquals(this object objectA, object objectB)
+        {
+            return DeepEquals(objectA, objectB);
         }
 
-        private static bool ValueEqualsCheck(GameObject gameObjectA, GameObject gameObjectB)
+        private static bool DeepEqualsGameObj(GameObject gameObjectA, GameObject gameObjectB)
         {
-            bool childrenMatch = gameObjectA.Children().ValueScrambledEquals(gameObjectB.Children(), ValueEqualsCheck);
-            bool componentsMatch = gameObjectA.GetComponents<Component>().ValueScrambledEquals(gameObjectB.GetComponents<Component>(), ValueEqualsCheck);
+            bool childrenMatch = gameObjectA.Children().ValueScrambledEquals(gameObjectB.Children(), DeepEqualsGameObj);
+            bool componentsMatch = gameObjectA.GetComponents<Component>().ValueScrambledEquals(gameObjectB.GetComponents<Component>(), DeepEquals);
 
             return childrenMatch && componentsMatch;
         }
-        
-        public static bool ValueEquals(this Component componentA, Component componentB)
-        {
-            return ValueEqualsCheck(componentA, componentB);
-        }
 
-        private static bool ValueEqualsCheck(object objectA, object objectB)
+        private static bool DeepEquals(object objectA, object objectB)
         {
             bool equal = true;
 
@@ -724,13 +732,13 @@ namespace TP.ExtensionMethods
                             propertyNames = Array.ConvertAll(properties, fieldInfo => fieldInfo.Name);
                         }
 
-                        object[] fieldsValueA = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectA));
-                        object[] fieldsValueB = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectB));
-                        bool fieldsEqual = fieldsValueA.ValueOrderedEquals(fieldsValueB, ValueEqualsCheck, verbose, fieldNames);
+                        object[] fieldsValueA = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectA, true));
+                        object[] fieldsValueB = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectB, true));
+                        bool fieldsEqual = fieldsValueA.ValueOrderedEquals(fieldsValueB, DeepEquals, verbose, fieldNames);
                         
                         object[] propertiesValueA = Array.ConvertAll(properties, propertyInfo => propertyInfo.GetValueNoError(objectA));
                         object[] propertiesValueB = Array.ConvertAll(properties, propertyInfo => propertyInfo.GetValueNoError(objectB));
-                        bool propertiesEqual = propertiesValueA.ValueOrderedEquals(propertiesValueB, ValueEqualsCheck, verbose, propertyNames);
+                        bool propertiesEqual = propertiesValueA.ValueOrderedEquals(propertiesValueB, DeepEquals, verbose, propertyNames);
 
                         equal = fieldsEqual && propertiesEqual;
                     }
@@ -738,44 +746,6 @@ namespace TP.ExtensionMethods
             }
             
             return equal;
-        }
-
-        public static object GetValueNoError(this FieldInfo fieldInfo, object obj, bool verbose=false)
-        {
-            object value = default(object);
-
-            try
-            {
-                value = fieldInfo.GetValue(obj);
-            }
-            catch (Exception exception)
-            {
-                if (verbose)
-                {
-                    Debug.Log("Couldnt access field " + obj.ToString() + "." + fieldInfo.Name + ". " + exception.Message);
-                }
-            }
-
-            return value;
-        }
-
-        public static object GetValueNoError(this PropertyInfo propertyInfo, object obj, bool verbose=false)
-        {
-            object value = default(object);
-
-            try
-            {
-                value = propertyInfo.GetValue(obj, null);
-            }
-            catch (Exception exception)
-            {
-                if (verbose)
-                {
-                    Debug.Log("Couldnt access field " + obj.ToString() + "." + propertyInfo.Name + ". " + exception.Message);
-                }
-            }
-
-            return value;
         }
         
         public static bool ValueOrderedEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null)
@@ -876,6 +846,8 @@ namespace TP.ExtensionMethods
             return equals;
         }
 
+        #endregion
+
         public static GameObject[] Children(this GameObject gameObject)
         {
             Transform transform  = gameObject.transform;
@@ -916,9 +888,9 @@ namespace TP.ExtensionMethods
             
             if (type.IsSubclassOf(typeof(Component)))
             {
-                //if (!includeNames)
+                ///if (!includeNames)
                 //{
-                //types.Add(string.Concat(type, ".name"));
+                types.Add(string.Concat(type, ".name"));
                 //}
                 types.Add(string.Concat(type, ".gameObject"));
                 types.Add(string.Concat(type, ".hideFlags"));
@@ -945,6 +917,44 @@ namespace TP.ExtensionMethods
             }
 
             return types;
+        }
+
+        public static object GetValueNoError(this FieldInfo fieldInfo, object obj, bool verbose=false)
+        {
+            object value = default(object);
+
+            try
+            {
+                value = fieldInfo.GetValue(obj);
+            }
+            catch (Exception exception)
+            {
+                if (verbose)
+                {
+                    Debug.Log("Couldnt access field " + obj.ToString() + "." + fieldInfo.Name + ". " + exception.Message);
+                }
+            }
+
+            return value;
+        }
+
+        public static object GetValueNoError(this PropertyInfo propertyInfo, object obj, bool verbose=false)
+        {
+            object value = default(object);
+
+            try
+            {
+                value = propertyInfo.GetValue(obj, null);
+            }
+            catch (Exception exception)
+            {
+                if (verbose)
+                {
+                    Debug.Log("Couldnt access field " + obj.ToString() + "." + propertyInfo.Name + ". " + exception.Message);
+                }
+            }
+
+            return value;
         }
 
         public static List<PropertyInfo> GetPropertiesComparable(this Type type)
