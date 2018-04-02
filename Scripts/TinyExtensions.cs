@@ -674,31 +674,421 @@ namespace TP.ExtensionMethods
             return randomPicks;
         }
 
+        public static bool AddUnique<TKey, TValue>(this Dictionary<TKey, TValue> dictionary, TKey key, TValue value)
+        {
+            bool added = false;
+            if (!dictionary.ContainsKey(key))
+            {
+                dictionary.Add(key, value);
+                added = true;
+            }
+            else if (!Equals(dictionary[key], value))
+            {
+                Debug.LogWarning("You are trying assing a new value to a key that already exists in a dictionary.");
+            }
+
+            return added;
+        }
+
         #endregion
 
         #region Deep Equality Checking
 
-        public delegate bool ValueEqualsFunc<T>(T itemA, T itemB);
-                
-        public static bool ValueEquals(this GameObject gameObjectA, GameObject gameObjectB)
+        public enum ValueEqualsReportMatchType {
+            NONE = 0,
+            NAMES_EQUAL = 1,
+            TARGET_EQUAL = 2,
+            VALUE_EQUAL = 3,
+            EQUAL = 4,
+            REFERENCE_EQUAL = 5
+        }
+
+        public struct ValueEqualsReportMatch
         {
-            return DeepEqualsGameObj(gameObjectA, gameObjectB);
+            object match;
+            ValueEqualsReportMatchType type; 
+
+            public ValueEqualsReportMatch(object match, ValueEqualsReportMatchType type=ValueEqualsReportMatchType.NONE)
+            {
+                this.match = match;
+                this.type = type;
+            }
+
+            public object Match { get { return match; } }
+            public ValueEqualsReportMatchType Type { get { return type; } }
         }
         
-        public static bool ValueEquals(this object objectA, object objectB)
+        public class ValueEqualsReport
         {
-            return DeepEquals(objectA, objectB);
+            private bool equal = true;
+            private Dictionary<object, ValueEqualsReportMatch> allMatches = new Dictionary<object, ValueEqualsReportMatch> { };
+            private List<object> badMatches = new List<object> {};
+            private List<object> goodMatches = new List<object> {};
+            private int addCount = 0;
+            private int addLimit = 0;
+            private Type[] ignoreComponents;
+            public List<string> activeNotes = new List<string> { };
+            private Dictionary<object, List<string>> notes = new Dictionary<object, List<string>> { };
+
+            public void AddNonMatch(object nonMatchedObject)
+            {
+                equal = false;
+
+                if (nonMatchedObject == null)
+                {
+                    return;
+                }
+
+                ValueEqualsReportMatch matchA = new ValueEqualsReportMatch(null);
+                bool matchFoundA = allMatches.TryGetValue(nonMatchedObject, out matchA);
+                if (!matchFoundA)
+                {
+                    allMatches.AddUnique(nonMatchedObject, new ValueEqualsReportMatch(null));
+                    badMatches.AddUnique(nonMatchedObject);
+                    
+                    GameObject nonMatchedGameObject =  nonMatchedObject as GameObject;
+                    if (nonMatchedGameObject != null)
+                    {
+                        foreach (GameObject child in nonMatchedGameObject.Children())
+                        {
+                            AddNonMatch(child);
+                        }
+
+                        foreach (Component component in nonMatchedGameObject.GetComponents<Component>())
+                        {
+                            if (!ShouldIgnore(component))
+                            {
+                                AddNonMatch(component);
+                            }
+                        }
+                    }
+                }
+            }
+
+            public bool ShouldIgnore(object objectToCheck)
+            {
+                if (IgnoreComponents != null)
+                {
+                    if (IgnoreComponents.Contains(objectToCheck.GetType()))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            public void AddMatch(object objectA, object objectB, ValueEqualsReportMatchType type)
+            {
+                if (objectA == null || objectB == null)
+                {
+                    return;
+                }
+
+                if (addLimit > 0 && addCount >= addLimit)
+                {
+                    return;
+                }
+                addCount++;
+
+                ValueEqualsReportMatch matchA = new ValueEqualsReportMatch(null);
+                ValueEqualsReportMatch matchB = new ValueEqualsReportMatch(null);
+                bool matchAFound = allMatches.TryGetValue(objectA, out matchA);
+                bool matchBFound = allMatches.TryGetValue(objectB, out matchB);
+                
+                bool betterMatchExists = false;
+                if ((matchAFound && matchA.Type >= type) || (matchBFound && matchB.Type >= type))
+                {
+                    betterMatchExists = true;
+                }
+
+                if (!betterMatchExists)
+                {
+                    ReplaceMatch(
+                        objectA: objectA, 
+                        newMatch: new ValueEqualsReportMatch(objectB, type),
+                        recursive: matchA.Type != ValueEqualsReportMatchType.NONE && matchA.Match != objectB
+                    );
+                }
+            }
+
+            private void AddMatch(object objectA, ValueEqualsReportMatch match)
+            {       
+                object objectB = match.Match;
+                if (allMatches.AddUnique(objectA, new ValueEqualsReportMatch(objectB, match.Type)))
+                {
+                    if (objectA != objectB)
+                    {
+                        RemoveMatch(objectB);
+                        allMatches.AddUnique(objectB, new ValueEqualsReportMatch(objectA, match.Type));
+                    }
+                    goodMatches.AddUnique(objectA);
+                }
+            }
+
+            private void ReplaceMatch(object objectA, ValueEqualsReportMatch newMatch=default(ValueEqualsReportMatch), bool recursive=false)
+            {
+                ValueEqualsReportMatch matchA = new ValueEqualsReportMatch();
+                bool matchAFound = allMatches.TryGetValue(objectA, out matchA);
+
+                if (ShouldIgnore(objectA))
+                {
+                    return;
+                }
+                
+                RemoveMatch(objectA);
+
+                if (matchAFound && matchA.Type != ValueEqualsReportMatchType.NONE)
+                {
+                    object objectB = matchA.Match;
+                    ValueEqualsReportMatch matchB = new ValueEqualsReportMatch();
+                    bool matchBFound = allMatches.TryGetValue(objectB, out matchB);
+
+                    if (objectB != objectA && matchBFound && matchB.Type != ValueEqualsReportMatchType.NONE)
+                    {
+                        ReplaceMatch(objectB, recursive:recursive);
+                    }
+                }
+
+                if (newMatch.Type == ValueEqualsReportMatchType.NONE)
+                {
+                    AddNonMatch(objectA);
+                }
+                else
+                {
+                    AddMatch(objectA, newMatch);
+                }
+
+                if (newMatch.Type >= ValueEqualsReportMatchType.VALUE_EQUAL)
+                {
+                    ClearNotes(objectA);
+                }
+                
+                if (recursive)
+                {
+                    if (objectA is GameObject)
+                    {
+                        foreach (GameObject child in (objectA as GameObject).Children())
+                        {
+                            ReplaceMatch(child, recursive:recursive);
+                        }
+
+                        foreach (Component component in (objectA as GameObject).GetComponents<Component>())
+                        {
+                            ReplaceMatch(component, recursive:recursive);
+                        }
+                    }
+                }
+            }
+
+            //private void RemoveMatch(object objectToRemove)
+            //{
+            //    allMatches.Remove(objectToRemove);
+            //    badMatches.Remove(objectToRemove);
+            //    goodMatches.Remove(objectToRemove);
+            //}
+
+            private bool RemoveMatch(object objectToRemove)
+            {
+                bool found = allMatches.Remove(objectToRemove);
+                badMatches.Remove(objectToRemove);
+                goodMatches.Remove(objectToRemove);
+
+                return found;
+            }
+
+            private void RemoveGoodMatch(object objectToRemove)
+            {
+                if (goodMatches.Remove(objectToRemove))
+                {
+                    allMatches.Remove(objectToRemove);
+                }
+            }
+
+            private void RemoveBadMatch(object objectToRemove)
+            {
+                if (badMatches.Remove(objectToRemove))
+                {
+                    allMatches.Remove(objectToRemove);
+                }
+            }
+
+            public object GetMatch(object objectToFindMatchOf)
+            {
+                return allMatches[objectToFindMatchOf].Match;
+            }
+
+            public ValueEqualsReportMatch GetMatchDetails(object objectToFindMatchOf)
+            {
+                ValueEqualsReportMatch details = new ValueEqualsReportMatch(null);
+                allMatches.TryGetValue(objectToFindMatchOf, out details);
+
+                return details;
+            }
+
+            public bool Matched(object objectToCheck)
+            {
+                ValueEqualsReportMatch match = new ValueEqualsReportMatch();
+
+                if (!allMatches.TryGetValue(objectToCheck, out match))
+                {
+                    Debug.Log("Object " + objectToCheck + " not checked for match.");
+                }
+
+                return match.Type != ValueEqualsReportMatchType.NONE;
+            }
+
+            public void PushNotes(object objectKey)
+            {
+                if (activeNotes.Count > 0)
+                {
+                    if (objectKey != null)
+                    {
+                        List<string> objectNotes;
+                        if (!notes.TryGetValue(objectKey, out objectNotes))
+                        {
+                            objectNotes = new List<string> { };
+                        }
+                        else
+                        {
+                            notes.Remove(objectKey);
+                        }
+
+                        objectNotes.AddRange(activeNotes);
+                        notes.Add(objectKey, objectNotes);
+                    }
+
+                    activeNotes.Clear();
+                }
+            }
+
+            public List<string> GetNotes(object objectKey)
+            {
+                List<string> objectNotes;
+                notes.TryGetValue(objectKey, out objectNotes);
+                return objectNotes;
+            }
+
+            public void ClearNotes(object objectKey) {
+                if (notes.ContainsKey(notes))
+                {
+                    notes[notes].Clear();
+                }
+            }
+
+            public bool IsEqual
+            {
+                get { return equal; }
+            }
+
+            public List<object> AllMatches
+            {
+                get { return allMatches.Keys.ToList<object>(); } 
+            }
+
+            public List<object> BadMatches
+            {
+                get { return badMatches; } 
+            }
+
+            public List<object> GoodMatches
+            {
+                get { return goodMatches; }
+            }
+
+            public int Length {
+                get { return badMatches.Count + goodMatches.Count; }
+            }
+
+            public int AddLimit
+            {
+                get { return addLimit; }
+                set { addLimit = value; }
+            }
+
+            public Type[] IgnoreComponents
+            {
+                get { return ignoreComponents; }
+                set { ignoreComponents = value; }
+            }
         }
 
-        private static bool DeepEqualsGameObj(GameObject gameObjectA, GameObject gameObjectB)
-        {
-            bool childrenMatch = gameObjectA.Children().ValueScrambledEquals(gameObjectB.Children(), DeepEqualsGameObj);
-            bool componentsMatch = gameObjectA.GetComponents<Component>().ValueScrambledEquals(gameObjectB.GetComponents<Component>(), DeepEquals);
+        public delegate bool ValueEqualsFunc<T>(T itemA, T itemB, ValueEqualsReport valueEqualsReport=null);
 
-            return childrenMatch && componentsMatch;
+        public static bool ValueEquals(this GameObject gameObjectA, GameObject gameObjectB, ValueEqualsReport valueEqualsReport=null)
+        {
+            return DeepEqualsGameObj(gameObjectA, gameObjectB, valueEqualsReport);
+        }
+        
+        public static bool ValueEquals(this object objectA, object objectB, ValueEqualsReport valueEqualsReport=null)
+        {
+            return DeepEquals(objectA, objectB, valueEqualsReport);
         }
 
-        private static bool DeepEquals(object objectA, object objectB)
+        private static bool DeepEqualsGameObj(GameObject gameObjectA, GameObject gameObjectB, ValueEqualsReport valueEqualsReport=null)
+        {
+            bool equal = gameObjectA == gameObjectB;
+            bool childrenMatch = gameObjectA.Children().ValueScrambledEquals(gameObjectB.Children(), DeepEqualsGameObj, valueEqualsReport:valueEqualsReport);
+            bool componentsMatch = gameObjectA.GetComponents<Component>().ValueScrambledEquals(gameObjectB.GetComponents<Component>(), DeepEqualsComponent, valueEqualsReport:valueEqualsReport);
+            bool namesMatch = gameObjectA.name.Equals(gameObjectB.name);
+
+            bool deepEquals = childrenMatch && componentsMatch;
+
+            if (valueEqualsReport != null)
+            {
+                if (equal)
+                {
+                    valueEqualsReport.AddMatch(gameObjectA, gameObjectB, ValueEqualsReportMatchType.EQUAL);
+                }
+                else if (deepEquals)
+                {
+                    valueEqualsReport.AddMatch(gameObjectA, gameObjectB, ValueEqualsReportMatchType.VALUE_EQUAL);
+                }
+                else if (namesMatch)
+                {
+                    valueEqualsReport.AddMatch(gameObjectA, gameObjectB, ValueEqualsReportMatchType.NAMES_EQUAL);
+                }
+            }
+
+            return equal || deepEquals || namesMatch;
+        }
+
+        private static bool DeepEqualsComponent(Component componentA, Component componentB, ValueEqualsReport valueEqualsReport=null)
+        {
+            bool equal = componentA == componentB;
+            bool deepEquals = DeepEquals(componentA, componentB, valueEqualsReport);
+            bool typesMatch = componentA.GetType() == componentB.GetType();
+            bool gameObjectNamesMatch = componentA.name.Equals(componentB.name);
+
+            bool namesMatch = typesMatch && gameObjectNamesMatch;
+            bool anyEqual = equal || deepEquals || namesMatch;
+
+            if (equal)
+            {
+                valueEqualsReport.AddMatch(componentA, componentB, ValueEqualsReportMatchType.EQUAL);
+            }
+            if (deepEquals)
+            {
+                //Do nothing, match assinged in DeepEquals function call.
+            }
+            else if (namesMatch)
+            {
+                valueEqualsReport.AddMatch(componentA, componentB, ValueEqualsReportMatchType.NAMES_EQUAL);
+            }
+
+            if (anyEqual && !deepEquals)
+            {
+                valueEqualsReport.PushNotes(componentA);
+            }
+            else
+            {
+                valueEqualsReport.PushNotes(null);
+            }
+
+            return anyEqual;
+        }
+
+        private static bool DeepEquals(object objectA, object objectB, ValueEqualsReport valueEqualsReport=null)
         {
             bool equal = true;
 
@@ -717,6 +1107,14 @@ namespace TP.ExtensionMethods
                     if (objectA.Equals(objectB))
                     {
                         equal = true;
+
+                        //valueEqualsReport.AddMatch(objectA, objectB, ValueEqualsReportMatchType.EQUAL);
+                    }
+                    else if (objectA == objectB) //Approximate equals for floats
+                    {
+                        equal = true;
+
+                        //valueEqualsReport.AddMatch(objectA, objectB, ValueEqualsReportMatchType.EQUAL);
                     }
                     else if (type.IsSubclassOf(typeof(Component)))
                     {   
@@ -726,7 +1124,7 @@ namespace TP.ExtensionMethods
                         bool verbose = false;
                         string[] fieldNames = null;
                         string[] propertyNames = null;
-                        if (verbose || masterVerbose)
+                        if (verbose || masterVerbose || valueEqualsReport != null)
                         {
                             fieldNames = Array.ConvertAll(fields, fieldInfo => fieldInfo.Name);
                             propertyNames = Array.ConvertAll(properties, fieldInfo => fieldInfo.Name);
@@ -734,13 +1132,18 @@ namespace TP.ExtensionMethods
 
                         object[] fieldsValueA = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectA, true));
                         object[] fieldsValueB = Array.ConvertAll(fields, fieldInfo => fieldInfo.GetValueNoError(objectB, true));
-                        bool fieldsEqual = fieldsValueA.ValueOrderedEquals(fieldsValueB, DeepEquals, verbose, fieldNames);
+                        bool fieldsEqual = fieldsValueA.ValueOrderedEquals(fieldsValueB, DeepEquals, verbose, fieldNames, valueEqualsReport);
                         
                         object[] propertiesValueA = Array.ConvertAll(properties, propertyInfo => propertyInfo.GetValueNoError(objectA));
                         object[] propertiesValueB = Array.ConvertAll(properties, propertyInfo => propertyInfo.GetValueNoError(objectB));
-                        bool propertiesEqual = propertiesValueA.ValueOrderedEquals(propertiesValueB, DeepEquals, verbose, propertyNames);
+                        bool propertiesEqual = propertiesValueA.ValueOrderedEquals(propertiesValueB, DeepEquals, verbose, propertyNames, valueEqualsReport);
 
                         equal = fieldsEqual && propertiesEqual;
+
+                        if (equal)
+                        {
+                            valueEqualsReport.AddMatch(objectA, objectB, ValueEqualsReportMatchType.VALUE_EQUAL);
+                        }
                     }
                 }
             }
@@ -748,100 +1151,163 @@ namespace TP.ExtensionMethods
             return equal;
         }
         
-        public static bool ValueOrderedEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null)
+        public static bool ValueOrderedEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null, ValueEqualsReport valueEqualsReport=null)
         {
             bool equals = true;
             int length = setA.Length;
+            bool iterateThoughAll = verbose || masterVerbose || valueEqualsReport != null;
 
             if (setA.Length != setB.Length)
             {
                 equals = false;
-            }
-            else
-            {
-                for (int i = 0; i < length; i++)
+
+                if (!iterateThoughAll)
                 {
-                    T itemA = setA[i];
-                    T itemB = setB[i];
+                    return equals;
+                }
+            }
+            
+            for (int i = 0; i < length; i++)
+            {
+                T itemA = setA[i];
+                T itemB = setB[i];
 
-                    if (!valueEquals(itemA, itemB))
+                if (!valueEquals(itemA, itemB, valueEqualsReport))
+                {
+                    equals = false;
+
+                    if (verbose || masterVerbose)
                     {
-                        equals = false;
+                        string itemNameA = names[i];
+                        string itemValueA = itemA != null ? "null" : itemA.ToString();
+                        string itemNameB = names[i];
+                        string itemValueB = itemB != null ? "null" : itemB.ToString();
 
-                        if (verbose || masterVerbose)
-                        {
-                            string itemNameA = names[i];
-                            string itemValueA = itemA != null ? "null" : itemA.ToString();
-                            string itemNameB = names[i];
-                            string itemValueB = itemB != null ? "null" : itemB.ToString();
-
-                            Debug.Log(String.Concat("Non-Match: (", itemNameA, ") ", itemA.ToString(), " != ", itemB.ToString()));
-                        }
-                        else
-                        {
-                            break;
-                        }
+                        Debug.Log(String.Concat("Non-Match: (", itemNameA, ") ", itemA.ToString(), " != ", itemB.ToString()));
                     }
-                    else
-                    {
-                        //if ((verbose || masterVerbose) && itemA != null)
-                        //{
-                        //    string itemNameA = names[i];
-                        //    string itemValueA = itemA != null ? "null" : itemA.ToString();
 
-                        //    Debug.Log(String.Concat("Match: (", itemNameA, ") ", itemValueA));
-                        //}
+                    if (names != null && names.Length > i)
+                    {
+                        string itemNameA = names[i];
+                        string itemValueA = itemA == null ? "null" : itemA.ToString();
+                        string itemNameB = names[i];
+                        string itemValueB = itemB == null ? "null" : itemB.ToString();
+
+                        string note = String.Concat(itemNameA, ": ", itemValueA, " != ", itemValueB);
+
+                        valueEqualsReport.activeNotes.Add(note);
+                    }
+
+                    if (!iterateThoughAll)
+                    {
+                        break;
                     }
                 }
+                else
+                {
+                    //if ((verbose || masterVerbose) && itemA != null)
+                    //{
+                    //    string itemNameA = names[i];
+                    //    string itemValueA = itemA != null ? "null" : itemA.ToString();
+
+                    //    Debug.Log(String.Concat("Match: (", itemNameA, ") ", itemValueA));
+                    //}
+                }
+
+                //if (valueEqualsReport != null)
+                //{
+                //    if (!equals)
+                //    {
+                //        valueEqualsReport.AddNonMatch(itemA);
+                //        valueEqualsReport.AddNonMatch(itemB);
+                //    }
+                //}
             }
 
             return equals;
         }
         
-        public static bool ValueScrambledEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null) 
+        public static bool ValueScrambledEquals<T>(this T[] setA, T[] setB, ValueEqualsFunc<T> valueEquals, bool verbose=false, string[] names=null, ValueEqualsReport valueEqualsReport=null) 
         {
             bool equals = true;
             int lengthA = setA.Length;
             int lengthB = setB.Length;
+            bool iterateThoughAll = verbose || masterVerbose || valueEqualsReport != null;
 
             if (lengthA != lengthB)
             {
                 equals = false;
-            }
-            else
-            { 
-                bool[] indexMatchedA = new bool[lengthA];
-                bool[] indexMatchedB = new bool[lengthB];
 
-                for (int ia = 0; ia < lengthA; ia++)
+                if (!iterateThoughAll)
                 {
-                    if (indexMatchedA[ia]) { continue; }
+                    return equals;
+                }
+            }
+            
+            bool[] indexMatchedA = new bool[lengthA];
+            bool[] indexMatchedB = new bool[lengthB];
 
-                    bool matchFound = false;
+            for (int ia = 0; ia < lengthA; ia++)
+            {
+                if (indexMatchedA[ia]) { continue; }
 
-                    T itemA = setA[ia];
-                    for (int ib = 0; ib < lengthB; ib++)
+                bool matchFound = false;
+
+                T itemA = setA[ia];
+                for (int ib = 0; ib < lengthB; ib++)
+                {
+                    if (indexMatchedB[ib]) { continue; }
+
+                    T itemB = setB[ib];
+                    if (valueEquals(itemA, itemB, valueEqualsReport))
                     {
-                        if (indexMatchedB[ib]) { continue; }
-
-                        T itemB = setB[ib];
-                        if (valueEquals(itemA, itemB))
-                        {
-                            indexMatchedA[ia] = true;
-                            indexMatchedB[ib] = true;
-                            matchFound = true;
-                            break;
-                        }
+                        indexMatchedA[ia] = true;
+                        indexMatchedB[ib] = true;
+                        matchFound = true;
+                            
+                        //if (valueEqualsReport != null)
+                        //{
+                        //    valueEqualsReport.AddMatch(itemA, itemB, ValueEqualsReportMatchType.VALUE_EQUAL);
+                        //}
+                            
+                        break;
                     }
+                }
 
-                    if (!matchFound)
+                if (!matchFound)
+                {
+                    equals = false;
+                        
+                    if (!iterateThoughAll)
                     {
-                        equals = false;
-
                         break;
                     }
                 }
             }
+
+            //if (valueEqualsReport != null)
+            //{
+            //    if (equals)
+            //    {
+            //        for (int i = 0; i < indexMatchedA.Length; i++)
+            //        {
+            //            if (!indexMatchedA[i])
+            //            {
+            //                valueEqualsReport.AddNonMatch(setA[i]);
+            //            }
+            //        }
+            //    }
+            //    else
+            //    {
+            //        for (int i = 0; i < indexMatchedB.Length; i++)
+            //        {
+            //            if (!indexMatchedB[i])
+            //            {
+            //                valueEqualsReport.AddNonMatch(setB[i]);
+            //            }
+            //        }
+            //    }
+            //}
 
             return equals;
         }
@@ -909,6 +1375,21 @@ namespace TP.ExtensionMethods
                     types.Add(string.Concat(type, ".worldToLocalMatrix"));
                     types.Add(string.Concat(type, ".localToWorldMatrix"));
                 }
+
+                //Debug.Log("type.ToString(): " + type.ToString());
+                //if (type.ToString().Equals("PrefabLink"))
+                //{
+                //    types.Add(string.Concat(type, ".target"));
+                //    types.Add(string.Concat(type, ".Target"));
+                //}
+
+                //if (type.IsSubclassOf(typeof(Rigidbody)))
+                //{
+                    types.Add(string.Concat(type, ".worldCenterOfMass"));
+                    types.Add(string.Concat(type, ".position"));
+                    types.Add(string.Concat(type, ".centerOfMass"));
+                    types.Add(string.Concat(type, ".inertiaTensor"));
+                //}
 
                 if (type.IsSubclassOf(typeof(Collider)))
                 {
@@ -1013,7 +1494,7 @@ namespace TP.ExtensionMethods
 
             return fieldsFiltered;
         }
-        
+
         public static Component CopyComponent<T>(this GameObject destination, T original, bool verbose = false) where T : Component
         {
             System.Type type = original.GetType();
@@ -1039,16 +1520,23 @@ namespace TP.ExtensionMethods
                 copy = destination.GetComponent(type);
             }
 
+            return copy.CopyComponent(original);
+        }
+        
+        public static Component CopyComponent<T>(this Component destination, T original, bool verbose = false) where T : Component
+        {
+            System.Type type = original.GetType();
+
             if (type == typeof(Transform))
             {
-                Transform copyTransform = copy as Transform;
+                Transform copyTransform = destination as Transform;
                 Transform originalTransform = original as Transform;
                 
                 copyTransform.localScale = originalTransform.localScale;
                 copyTransform.localRotation = originalTransform.localRotation;
                 copyTransform.localPosition = originalTransform.localPosition;
 
-                copy = copyTransform;
+                destination = copyTransform;
             }
             else
             {
@@ -1057,7 +1545,7 @@ namespace TP.ExtensionMethods
                 {
                     try
                     {
-                        field.SetValue(copy, field.GetValue(original));
+                        field.SetValue(destination, field.GetValue(original));
                     }
                     catch (Exception exception)
                     {
@@ -1073,7 +1561,7 @@ namespace TP.ExtensionMethods
                 {
                     try
                     {
-                        property.SetValue(copy, property.GetValue(original, null), null);
+                        property.SetValue(destination, property.GetValue(original, null), null);
                     }
                     catch (Exception exception)
                     {
@@ -1085,7 +1573,7 @@ namespace TP.ExtensionMethods
                 }
             }
 
-            return copy;
+            return destination;
         }
     }
 }
